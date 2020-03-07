@@ -2,7 +2,8 @@
 
 #include "vesc_driver/vesc_interface.h"
 
-#include <pthread.h>
+#include <thread>
+#include <memory>
 
 #include <string>
 #include <sstream>
@@ -25,14 +26,15 @@ public:
             serial::eightbits, serial::parity_none, serial::stopbits_one, serial::flowcontrol_none)
   {}
 
-  void* rxThread(void);
+  void rxThread(void);
 
-  static void* rxThreadHelper(void *context)
+  static void rxThreadHelper(void *context)
   {
-    return ((VescInterface::Impl*)context)->rxThread();
+    ((VescInterface::Impl*)context)->rxThread();
+    return;
   }
 
-  pthread_t rx_thread_;
+  std::unique_ptr<std::thread> rx_thread_;
   bool rx_thread_run_;
   PacketHandlerFunction packet_handler_;
   ErrorHandlerFunction error_handler_;
@@ -40,7 +42,7 @@ public:
   VescFrame::CRC send_crc_;
 };
 
-void* VescInterface::Impl::rxThread(void)
+void VescInterface::Impl::rxThread(void)
 {
   Buffer buffer;
   buffer.reserve(4096);
@@ -167,9 +169,8 @@ void VescInterface::connect(const std::string& port)
 
   // start up a monitoring thread
   impl_->rx_thread_run_ = true;
-  int result =
-    pthread_create(&impl_->rx_thread_, NULL, &VescInterface::Impl::rxThreadHelper, impl_.get());
-  assert(0 == result);
+  impl_->rx_thread_ = std::make_unique<std::thread>(
+    std::bind(&VescInterface::Impl::rxThread, impl_.get()));
 }
 
 void VescInterface::disconnect()
@@ -179,8 +180,8 @@ void VescInterface::disconnect()
   if (isConnected()) {
     // bring down read thread
     impl_->rx_thread_run_ = false;
-    int result = pthread_join(impl_->rx_thread_, NULL);
-    assert(0 == result);
+    impl_->rx_thread_->join();
+    impl_->rx_thread_.reset();
 
     impl_->serial_.close();
   }
